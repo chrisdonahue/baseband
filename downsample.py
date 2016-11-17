@@ -84,7 +84,7 @@ if __name__ == '__main__':
     order = 8
     A = range(1, 50)
     B = range(1, 100)
-    block_size = 256
+    block_size = 50
 
     # Load wav file.
     fso, wav = wavread(wav_fp)
@@ -128,19 +128,27 @@ if __name__ == '__main__':
     read_idx = 0
     write_idx = delay
 
-    # Perform RT downsampling.
+    # Perform RT downsampling. Keep a noncausal version around as a sanity check.
     wav_down = []
     wav_noncausal = []
     for i in xrange(0, len(wav_f), block_size):
         block = wav_f[i:i + block_size]
         blockout = process_block(block, len(block))
+
         wav_noncausal.append(blockout)
+
         write_idx = write_to_ring_buffer(storage, blockout, write_idx)
         read_idx, blockdel = read_from_ring_buffer(storage, block.shape[0], read_idx)
         wav_down.append(blockdel)
-    wav_down = np.concatenate(wav_down)
-    wav_noncausal = np.concatenate(wav_noncausal)
 
+    # Alert us if our theoretical ranges were ever wrong.
+    blockout_lens = [x.shape[0] for x in wav_noncausal[:-1]]
+    assert min(blockout_lens) >= blockout_minlen
+    assert max(blockout_lens) <= blockout_maxlen
+
+    # Concatenate blocks into final output.
+    # wav_noncausal = np.concatenate(wav_noncausal)
+    wav_down = np.concatenate(wav_down)
     assert wav_f.shape == wav_down.shape
 
     # Write file out.
