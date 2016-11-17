@@ -49,6 +49,9 @@ def downsample_rt(x, m, l,
             xinterp, zinterp_m = lfilter(interp_m[0], interp_m[1], xup, zi=zinterp_m)
         else:
             xinterp = np.zeros_like(xup)
+
+        # Apply gain
+        xinterp *= float(m)
         
         # Downsample
         extra, xdown = downsample_crude(xinterp[down_offset:], l)
@@ -65,6 +68,9 @@ def downsample_rt(x, m, l,
         else:
             # Calling lfilter with an empty array has consequences for some reason
             xreinterp = np.zeros_like(xreup)
+
+        # Apply gain
+        xreinterp *= float(l)
 
         # Redownsample
         reextra, xrecons = downsample_crude(xreinterp[redown_offset:], m)
