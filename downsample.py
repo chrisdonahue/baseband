@@ -1,34 +1,17 @@
 import numpy as np
 
-from scipy.signal import lfilter, lfilter_zi, iirfilter
+from scipy.signal import lfilter, lfilter_zi
 
 from util import read_from_ring_buffer, write_to_ring_buffer, calc_block_range, upsample_crude, downsample_crude
 
 def downsample_rt(x, m, l,
-                  iir_order=8,
-                  interp_m=None,
-                  interp_l=None,
+                  interp_m,
+                  interp_l,
                   block_size=256,
                   causal=True):
     assert m >= 0 and l > 0
     if m == 0:
-    	return np.zeros((0,), dtype=x.dtype)
-
-    # Create filters if not provided.
-    if interp_m is None:
-    	if m > 1:
-        	interp_m = iirfilter(iir_order, 1.0 / m, btype='lowpass', ftype='butter')
-    	else:
-        	interp_m = (np.zeros(iir_order + 1, dtype=np.float64), np.zeros(iir_order + 1, dtype=np.float64))
-        	interp_m[0][0] = 1.0
-        	interp_m[1][0] = 1.0
-    if interp_l is None:
-    	if l > 1:
-        	interp_l = iirfilter(iir_order, 1.0 / l, btype='lowpass', ftype='butter')
-       	else:
-        	interp_l = (np.zeros(iir_order + 1, dtype=np.float64), np.zeros(iir_order + 1, dtype=np.float64))
-        	interp_l[0][0] = 1.0
-        	interp_l[1][0] = 1.0
+        return np.zeros((0,), dtype=x.dtype)
 
     # Calc initial filter states.
     zinterp_m = lfilter_zi(*interp_m)
@@ -61,13 +44,13 @@ def downsample_rt(x, m, l,
         if m > 0:
             xup = upsample_crude(block, m)
         else:
-        	xup = np.zeros((0,), dtype=block.dtype)
+            xup = np.zeros((0,), dtype=block.dtype)
         
         # Interpolate
         if xup.shape[0] > 0:
-        	xinterp, zinterp_m = lfilter(interp_m[0], interp_m[1], xup, zi=zinterp_m)
+            xinterp, zinterp_m = lfilter(interp_m[0], interp_m[1], xup, zi=zinterp_m)
         else:
-        	xinterp = np.zeros_like(xup)
+            xinterp = np.zeros_like(xup)
         
         # Downsample
         extra, xdown = downsample_crude(xinterp[down_offset:], l)
@@ -120,7 +103,7 @@ if __name__ == '__main__':
 
     from scipy.io.wavfile import read as wavread
     from scipy.io.wavfile import write as wavwrite
-    from scipy.signal import iirfilter, lfilter_zi
+    from scipy.signal import iirfilter, remez
 
     from util import reduce_rational_list, rationalize_real
 
@@ -131,6 +114,10 @@ if __name__ == '__main__':
     parser.add_argument('out_fp', type=str, help='Output 16-bit signed PCM WAV filepath')
     parser.add_argument('-a', '--numerators', type=str, help='CSV list of possible upsampling amounts')
     parser.add_argument('-b', '--denominators', type=str, help='CSV list of possible downsampling amounts')
+    parser.add_argument('--use_fir', dest='fir', action='store_true', help='Use FIR filters for interpolation')
+    parser.add_argument('--use_iir', dest='fir', action='store_false', help='Use IIR filters for interpolation')
+    parser.add_argument('--fir_ntaps', type=int, help='Ntaps for FIR')
+    parser.add_argument('--fir_tol', type=float, help='Cutoff tolerance for FIR')
     parser.add_argument('--iir_order', type=int, help='Order of IIR interpolation filters')
     parser.add_argument('--max_cascade', type=int, help='Maximum number of downsampling cascades')
     parser.add_argument('--block_size', type=int, help='Block size for downsampling, should only affect runtime and introduce delay in causal mode')
@@ -140,6 +127,9 @@ if __name__ == '__main__':
     parser.set_defaults(
         a='0,1,2,3,5,7',
         b='1,2,3,5,7',
+        fir=True,
+        fir_ntaps=128,
+        fir_tol=0.01,
         iir_order=8,
         max_cascade=1,
         block_size=256,
@@ -166,10 +156,30 @@ if __name__ == '__main__':
     rational_list = rationalize_real(args.fsn / fso, A=A, B=B, max_depth=args.max_cascade)
     print 'Closest rational list: {}, fsn of {}'.format(rational_list, fso * reduce_rational_list(rational_list))
 
+    def create_fir(i, ntaps, tolerance):
+        cutoff = 0.5 / i
+        b = remez(ntaps, [0.0, cutoff, cutoff + tolerance, 0.5], [1, 0])
+        return b, np.ones(1, dtype=np.float64)
+
+    def create_iir(i, order):
+        return iirfilter(order, 1.0 / i, btype='lowpass', ftype='butter')
+
+    def create_identity():
+        return (np.array([1.0], dtype=np.float64), np.array([1.0], dtype=np.float64))
+
     # Perform downsampling.
     wav_down = wav_f
     for upsample, downsample in rational_list:
-        wav_down = downsample_rt(wav_down, upsample, downsample, iir_order=args.iir_order, block_size=args.block_size, causal=args.causal)
+        filters = []
+        for i in [upsample, downsample]:
+            if i > 1:
+                if args.fir:
+                    filters.append(create_fir(i, args.fir_ntaps, args.fir_tol))
+                else:
+                    filters.append(create_iir(i, args.iir_order))
+            else:
+                filters.append(create_identity())
+        wav_down = downsample_rt(wav_down, upsample, downsample, filters[0], filters[1], block_size=args.block_size, causal=args.causal)
 
     # Write file out.
     wav_out = (wav_down * 32767.0).astype(np.int16)
