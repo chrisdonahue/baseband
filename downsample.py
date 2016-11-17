@@ -153,12 +153,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
     A = [int(x) for x in args.a.split(',')]
     B = [int(x) for x in args.b.split(',')]
-    print args
 
     # Load wav file.
     fso, wav = wavread(args.wav_fp)
     fso = float(fso)
-    assert args.fsn <= fso
 
     # Average multi-channel.
     wav_f = wav.astype(np.float64)
