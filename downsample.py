@@ -1,6 +1,6 @@
 import numpy as np
 
-from scipy.signal import lfilter, lfilter_zi
+from scipy.signal import lfilter
 
 from util import read_from_ring_buffer, write_to_ring_buffer, calc_block_range, upsample_crude, downsample_crude
 
@@ -14,10 +14,8 @@ def downsample_rt(x, m, l,
         return np.zeros((0,), dtype=x.dtype)
 
     # Calc initial filter states.
-    zinterp_m = lfilter_zi(*interp_m)
-    zinterp_l = lfilter_zi(*interp_l)
-    zinterp_m = np.zeros_like(zinterp_m)
-    zinterp_l = np.zeros_like(zinterp_l)
+    zinterp_m = np.zeros(max(interp_m[0].shape[0], interp_m[1].shape[0]) - 1, dtype=np.float64)
+    zinterp_l = np.zeros(max(interp_l[0].shape[0], interp_l[1].shape[0]) - 1, dtype=np.float64)
 
     # Set initial downsampling offset states.
     down_offset = 0
