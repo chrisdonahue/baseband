@@ -61,12 +61,12 @@ def rationalize_real(rat, A, B, max_depth=1, curr_depth=0, curr_rational_list=[]
         rational_list: List of tuples representing numerators and denominators
     """
     if curr_depth >= max_depth:
-        return curr_rat
+        return curr_rational_list
 
     closest = (float('inf'), (None, None))
     for a in A:
         for b in B:
-            rational_list = rationalize_real(rat, A, B, max_depth=max_depth, curr_depth=curr_depth + 1, curr_rat=[(a, b)] + curr_rational_list[:])
+            rational_list = rationalize_real(rat, A, B, max_depth=max_depth, curr_depth=curr_depth + 1, curr_rational_list=[(a, b)] + curr_rational_list[:])
             rat_approx = reduce_rational_list(rational_list)
             error = abs(rat_approx - rat)
             if error < closest[0]:
