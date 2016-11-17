@@ -40,26 +40,37 @@ def read_from_ring_buffer(ring_buffer, nsamples, read_idx):
         read_idx += 1
     return read_idx, result
 
-def rationalize_real(ratio, A, B):
-    """Finds a rational approximation of ratio (>= 0, <= 1) from integer sets A and B.
+def reduce_rational_list(rat_list):
+    map_rat = lambda (xn, xd): float(xn) / float(xd)
+    reduce_rat = lambda x, y: x * y
+    return reduce(reduce_rat, map(map_rat, rat_list))
+
+def rationalize_real(rat, A, B, max_depth=1, curr_depth=0, curr_rational_list=[]):
+    """Finds a recursive, rational approximation of ratio from integer lists A and B.
+
+    This method is general but is intended to be used with A and B as short lists of primes.
 
     Parameters:
-        ratio: The ratio to approximate (assumed to be >=0, <= 1)
+        rat: The ratio to approximate
         A: list of integer numerators
         B: list of integer denominators
+        max_depth: Max recursive depth
+        curr_depth: Current recursive depth
+        curr_rational_list: Current list of rational approximations
     Returns:
-        a: numerator of rational approximation
-        b: denominator of rational approximation
+        rational_list: List of tuples representing numerators and denominators
     """
-    closest = (None, None)
+    if curr_depth >= max_depth:
+        return curr_rat
+
+    closest = (float('inf'), (None, None))
     for a in A:
         for b in B:
-            if a > b:
-                pass
-            ratio_approx = float(a) / b
-            error = abs(ratio_approx - ratio)
-            if closest[0] is None or error < closest[0]:
-                closest = (error, (a, b))
+            rational_list = rationalize_real(rat, A, B, max_depth=max_depth, curr_depth=curr_depth + 1, curr_rat=[(a, b)] + curr_rational_list[:])
+            rat_approx = reduce_rational_list(rational_list)
+            error = abs(rat_approx - rat)
+            if error < closest[0]:
+                closest = (error, rational_list)
     return closest[1]
 
 def calc_block_range(n, m, l):
