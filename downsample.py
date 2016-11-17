@@ -2,9 +2,12 @@ import numpy as np
 
 from scipy.signal import lfilter, lfilter_zi, iirfilter
 
+from util import read_from_ring_buffer, write_to_ring_buffer, calc_block_range
+
 def downsample_rt(x, m, l,
                   interp_m=None,
                   interp_l=None,
+                  order=8,
                   block_size=256,
                   causal=True):
     # Create filters if not provided.
@@ -97,6 +100,7 @@ def downsample_rt(x, m, l,
         wav_noncausal.append(blockout)
 
         if causal:
+            # TODO: remove this. Trying to verify my calculation for buffer size by seeing a case where we don't overshoot
             if blockout.size == storage_len and delay + overflow != 0:
                 print storage_len
                 print 'yay'
@@ -109,30 +113,52 @@ def downsample_rt(x, m, l,
         # Alert us if our theoretical ranges were ever wrong.
         blockout_lens = [x.shape[0] for x in wav_noncausal[:-1]]
         if len(blockout_lens) > 0:
-	        assert min(blockout_lens) >= blockout_minlen
-	        assert max(blockout_lens) <= blockout_maxlen
+            assert min(blockout_lens) >= blockout_minlen
+            assert max(blockout_lens) <= blockout_maxlen
         return np.concatenate(wav_down)
     else:
         return np.concatenate(wav_noncausal)
 
 
 if __name__ == '__main__':
-    import sys
+    import argparse
 
     from scipy.io.wavfile import read as wavread
     from scipy.io.wavfile import write as wavwrite
     from scipy.signal import iirfilter, lfilter_zi
 
-    from util import rationalize_real, calc_block_range, read_from_ring_buffer, write_to_ring_buffer
+    from util import reduce_rational_list, rationalize_real
 
-    (wav_fp, fsn, out_fp) = sys.argv[1:]
-    order = 8
-    A = range(1, 50)
-    B = range(1, 100)
-    block_size = 256
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('wav_fp', type=str, help='Input 16-bit signed PCM WAV filepath')
+    parser.add_argument('fsn', type=float, help='Desired sampling rate')
+    parser.add_argument('out_fp', type=str, help='Output 16-bit signed PCM WAV filepath')
+    parser.add_argument('-a', '--numerators', type=str, help='CSV list of possible upsampling amounts')
+    parser.add_argument('-b', '--denominators', type=str, help='CSV list of possible downsampling amounts')
+    parser.add_argument('--iir_order', type=int, help='Order of IIR interpolation filters')
+    parser.add_argument('--max_cascade', type=int, help='Maximum number of downsampling cascades')
+    parser.add_argument('--block_size', type=int, help='Block size for downsampling, should only affect runtime and introduce delay in causal mode')
+    parser.add_argument('--causal', dest='causal', action='store_true', help='Run the downsampling in real-time (using delay)')
+    parser.add_argument('--noncausal', dest='causal', action='store_false', help='Run the downsampling offline (output length may not be equal to input length)')
+
+    parser.set_defaults(
+        a='0,1,2,3,5,7',
+        b='1,2,3,5,7',
+        iir_order=8,
+        max_cascade=1,
+        block_size=256,
+        causal=False)
+
+    args = parser.parse_args()
+    A = [int(x) for x in args.a.split(',')]
+    B = [int(x) for x in args.b.split(',')]
+    print args
 
     # Load wav file.
-    fso, wav = wavread(wav_fp)
+    fso, wav = wavread(args.wav_fp)
+    fso = float(fso)
+    assert args.fsn <= fso
 
     # Average multi-channel.
     wav_f = wav.astype(np.float64)
@@ -143,17 +169,15 @@ if __name__ == '__main__':
     # Normalize.
     wav_f /= 32767.0
 
-    # Parse rates.
-    fso, fsn = float(fso), float(fsn)
-    assert fsn <= fso
-
     # Discretize rate ratio.
-    upsample, downsample = rationalize_real(fsn / fso, A=A, B=B)[0]
-    print 'Closest ratio {}/{}, fsn of {}'.format(upsample, downsample, fso * (float(upsample) / downsample))
+    rational_list = rationalize_real(args.fsn / fso, A=A, B=B, max_depth=args.max_cascade)
+    print 'Closest rational list: {}, fsn of {}'.format(rational_list, fso * reduce_rational_list(rational_list))
 
     # Perform downsampling.
-    wav_down = downsample_rt(wav_f, upsample, downsample, block_size=block_size)
+    wav_down = wav_f
+    for upsample, downsample in rational_list:
+        wav_down = downsample_rt(wav_down, upsample, downsample, block_size=args.block_size, causal=args.causal)
 
     # Write file out.
     wav_out = (wav_down * 32767.0).astype(np.int16)
-    wavwrite(out_fp, fso, wav_out)
+    wavwrite(args.out_fp, fso, wav_out)
