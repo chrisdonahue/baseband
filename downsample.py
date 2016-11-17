@@ -51,7 +51,7 @@ def downsample_rt(x, m, l,
             xinterp = np.zeros_like(xup)
 
         # Apply gain
-        xinterp *= float(m)
+        xinterp *= float(max(1, m - 1))
         
         # Downsample
         extra, xdown = downsample_crude(xinterp[down_offset:], l)
@@ -70,7 +70,7 @@ def downsample_rt(x, m, l,
             xreinterp = np.zeros_like(xreup)
 
         # Apply gain
-        xreinterp *= float(l)
+        xreinterp *= float(max(1, l - 1))
 
         # Redownsample
         reextra, xrecons = downsample_crude(xreinterp[redown_offset:], m)
@@ -116,8 +116,8 @@ if __name__ == '__main__':
     parser.add_argument('wav_fp', type=str, help='Input 16-bit signed PCM WAV filepath')
     parser.add_argument('fsn', type=float, help='Desired sampling rate')
     parser.add_argument('out_fp', type=str, help='Output 16-bit signed PCM WAV filepath')
-    parser.add_argument('-a', '--numerators', type=str, help='CSV list of possible upsampling amounts')
-    parser.add_argument('-b', '--denominators', type=str, help='CSV list of possible downsampling amounts')
+    parser.add_argument('--a', type=str, help='CSV list of possible upsampling amounts')
+    parser.add_argument('--b', type=str, help='CSV list of possible downsampling amounts')
     parser.add_argument('--use_fir', dest='fir', action='store_true', help='Use FIR filters for interpolation')
     parser.add_argument('--use_iir', dest='fir', action='store_false', help='Use IIR filters for interpolation')
     parser.add_argument('--fir_ntaps', type=int, help='Ntaps for FIR')
@@ -140,6 +140,7 @@ if __name__ == '__main__':
         causal=False)
 
     args = parser.parse_args()
+    print args
     A = [int(x) for x in args.a.split(',')]
     B = [int(x) for x in args.b.split(',')]
 
