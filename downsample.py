@@ -15,26 +15,29 @@ def process_block(block, block_size):
     global redown_offset
     
     # Upsample
-    xup = np.zeros((upsample, block_size))
+    xup = np.zeros((upsample, block_size), dtype=block.dtype)
     xup[0] = block
     xup = xup.T.flatten()
     
     # Interpolate
+    # TODO: is lfilter handling the feedforward delay for us?
     xinterp, zup = lfilter(iir_up_b, iir_up_a, xup, zi=zup)
     xinterp_len = xinterp.shape[0]
     assert xinterp_len == block_size * upsample
     
-    # Manage edge conditions for downsampling
+    # Create block to downsample
     xedge = xinterp[down_offset:]
     extra = xedge.shape[0] % downsample
     if extra > 0:
-        xedge = np.concatenate([xedge, np.zeros(downsample - extra, dtype=np.float64)])
+        xedge = np.concatenate([xedge, np.zeros(downsample - extra, dtype=xedge.dtype)])
     assert xedge.shape[0] % downsample == 0
-    down_offset = (downsample - ((xinterp_len - down_offset) % downsample))
+
+    # Manage edge conditions for downsampling next block
+    down_offset = downsample - extra
     if down_offset == downsample:
-        down_offset = 0
-    
-    # Decimate
+    	down_offset = 0
+
+    # Downsample
     xdown = np.reshape(xedge, (-1, downsample))[:, 0]
     
     # Reupsample
@@ -43,16 +46,22 @@ def process_block(block, block_size):
     xreup = xreup.T.flatten()
     
     # Reinterpolate
-    xreinterp, zdown = lfilter(iir_down_b, iir_down_a, xreup, zi=zdown)
-    xreinterp_len = xreinterp.shape[0]
+    if xreup.shape[0] > 0:
+    	xreinterp, zdown = lfilter(iir_down_b, iir_down_a, xreup, zi=zdown)
+    else:
+    	# Calling lfilter with an empty array has consequences for some reason
+    	xreinterp = np.zeros_like(xreup)
+	xreinterp_len = xreinterp.shape[0]
     
-    # Manage edge conditions for redownsampling
+    # Create block to redownsample
     xreedge = xreinterp[redown_offset:]
     extra = xreedge.shape[0] % upsample
     if extra > 0:
         xreedge = np.concatenate([xreedge, np.zeros(upsample - extra, dtype=np.float64)])
     assert xreedge.shape[0] % upsample == 0
-    redown_offset = (upsample - ((xreinterp_len - redown_offset) % upsample))
+
+    # Manage edge conditions for redownsampling next block
+    redown_offset = upsample - extra
     if redown_offset == upsample:
         redown_offset = 0
     
@@ -75,7 +84,7 @@ if __name__ == '__main__':
     order = 8
     A = range(1, 50)
     B = range(1, 100)
-    block_size = 1
+    block_size = 256
 
     # Load wav file.
     fso, wav = wavread(wav_fp)
@@ -103,6 +112,8 @@ if __name__ == '__main__':
     # Calc initial filter states.
     zup = lfilter_zi(iir_up_b, iir_up_a)
     zdown = lfilter_zi(iir_down_b, iir_down_a)
+    zup = np.zeros_like(zup)
+    zdown = np.zeros_like(zdown)
 
     # Set initial downsampling offset states.
     down_offset = 0
@@ -119,13 +130,16 @@ if __name__ == '__main__':
 
     # Perform RT downsampling.
     wav_down = []
+    wav_noncausal = []
     for i in xrange(0, len(wav_f), block_size):
         block = wav_f[i:i + block_size]
         blockout = process_block(block, len(block))
+        wav_noncausal.append(blockout)
         write_idx = write_to_ring_buffer(storage, blockout, write_idx)
         read_idx, blockdel = read_from_ring_buffer(storage, block.shape[0], read_idx)
         wav_down.append(blockdel)
     wav_down = np.concatenate(wav_down)
+    wav_noncausal = np.concatenate(wav_noncausal)
 
     assert wav_f.shape == wav_down.shape
 
