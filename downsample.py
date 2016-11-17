@@ -104,6 +104,7 @@ if __name__ == '__main__':
 
     # Discretize rate ratio.
     upsample, downsample = rationalize_real(fsn / fso, A=A, B=B)
+    print 'Closest ratio {}/{}, fsn of {}'.format(upsample, downsample, fso * (float(upsample) / downsample))
 
     # Calc interpolation filters.
     iir_up_b, iir_up_a = iirfilter(order, 1.0 / upsample, btype='lowpass', ftype='butter')
