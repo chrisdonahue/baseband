@@ -2,6 +2,30 @@ import math
 
 import numpy as np
 
+def upsample_crude(x, m):
+    assert m > 0
+
+    xup = np.zeros((m, x.shape[0]), dtype=x.dtype)
+    xup[0] = x
+    xup = xup.T.flatten()
+
+    assert xup.shape[0] == (x.shape[0] * m)
+
+    return xup.T.flatten()
+
+def downsample_crude(x, l):
+    assert l > 0
+
+    extra = x.shape[0] % l
+    if extra > 0:
+        x = np.concatenate([x, np.zeros(l - extra, dtype=x.dtype)])
+    assert x.shape[0] % l == 0
+
+    xdown = np.reshape(x, (-1, l))[:, 0]
+
+    return extra, xdown
+
+
 def write_to_ring_buffer(ring_buffer, samples, write_idx):
     """ Writes to a circular buffer (numpy arr).
 

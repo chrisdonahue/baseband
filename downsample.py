@@ -2,19 +2,33 @@ import numpy as np
 
 from scipy.signal import lfilter, lfilter_zi, iirfilter
 
-from util import read_from_ring_buffer, write_to_ring_buffer, calc_block_range
+from util import read_from_ring_buffer, write_to_ring_buffer, calc_block_range, upsample_crude, downsample_crude
 
 def downsample_rt(x, m, l,
+                  iir_order=8,
                   interp_m=None,
                   interp_l=None,
-                  order=8,
                   block_size=256,
                   causal=True):
+    assert m >= 0 and l > 0
+    if m == 0:
+    	return np.zeros((0,), dtype=x.dtype)
+
     # Create filters if not provided.
     if interp_m is None:
-        interp_m = iirfilter(order, 1.0 / m, btype='lowpass', ftype='butter')
+    	if m > 1:
+        	interp_m = iirfilter(iir_order, 1.0 / m, btype='lowpass', ftype='butter')
+    	else:
+        	interp_m = (np.zeros(iir_order + 1, dtype=np.float64), np.zeros(iir_order + 1, dtype=np.float64))
+        	interp_m[0][0] = 1.0
+        	interp_m[1][0] = 1.0
     if interp_l is None:
-        interp_l = iirfilter(order, 1.0 / l, btype='lowpass', ftype='butter')
+    	if l > 1:
+        	interp_l = iirfilter(iir_order, 1.0 / l, btype='lowpass', ftype='butter')
+       	else:
+        	interp_l = (np.zeros(iir_order + 1, dtype=np.float64), np.zeros(iir_order + 1, dtype=np.float64))
+        	interp_l[0][0] = 1.0
+        	interp_l[1][0] = 1.0
 
     # Calc initial filter states.
     zinterp_m = lfilter_zi(*interp_m)
@@ -44,34 +58,25 @@ def downsample_rt(x, m, l,
         block = x[i:i + block_size]
 
         # Upsample
-        xup = np.zeros((m, block.shape[0]), dtype=block.dtype)
-        xup[0] = block
-        xup = xup.T.flatten()
+        if m > 0:
+            xup = upsample_crude(block, m)
+        else:
+        	xup = np.zeros((0,), dtype=block.dtype)
         
         # Interpolate
-        xinterp, zinterp_m = lfilter(interp_m[0], interp_m[1], xup, zi=zinterp_m)
-        xinterp_len = xinterp.shape[0]
-        assert xinterp_len == block.shape[0] * m
+        if xup.shape[0] > 0:
+        	xinterp, zinterp_m = lfilter(interp_m[0], interp_m[1], xup, zi=zinterp_m)
+        else:
+        	xinterp = np.zeros_like(xup)
         
-        # Create block to downsample
-        xedge = xinterp[down_offset:]
-        extra = xedge.shape[0] % downsample
-        if extra > 0:
-            xedge = np.concatenate([xedge, np.zeros(downsample - extra, dtype=xedge.dtype)])
-        assert xedge.shape[0] % downsample == 0
-
-        # Manage edge conditions for downsampling next block
-        down_offset = downsample - extra
-        if down_offset == downsample:
-            down_offset = 0
-
         # Downsample
-        xdown = np.reshape(xedge, (-1, downsample))[:, 0]
+        extra, xdown = downsample_crude(xinterp[down_offset:], l)
+        down_offset = l - extra
+        if down_offset == l:
+            down_offset = 0
         
         # Reupsample
-        xreup = np.zeros((downsample, xdown.shape[0]))
-        xreup[0] = xdown
-        xreup = xreup.T.flatten()
+        xreup = upsample_crude(xdown, l)
         
         # Reinterpolate
         if xreup.shape[0] > 0:
@@ -79,22 +84,12 @@ def downsample_rt(x, m, l,
         else:
             # Calling lfilter with an empty array has consequences for some reason
             xreinterp = np.zeros_like(xreup)
-        xreinterp_len = xreinterp.shape[0]
-        
-        # Create block to redownsample
-        xreedge = xreinterp[redown_offset:]
-        extra = xreedge.shape[0] % m
-        if extra > 0:
-            xreedge = np.concatenate([xreedge, np.zeros(m - extra, dtype=np.float64)])
-        assert xreedge.shape[0] % m == 0
 
-        # Manage edge conditions for redownsampling next block
-        redown_offset = m - extra
+        # Redownsample
+        reextra, xrecons = downsample_crude(xreinterp[redown_offset:], m)
+        redown_offset = m - reextra
         if redown_offset == m:
             redown_offset = 0
-        
-        # Redownsample
-        xrecons = np.reshape(xreedge, (-1, m))[:, 0]
         
         blockout = xrecons
         wav_noncausal.append(blockout)
@@ -174,7 +169,7 @@ if __name__ == '__main__':
     # Perform downsampling.
     wav_down = wav_f
     for upsample, downsample in rational_list:
-        wav_down = downsample_rt(wav_down, upsample, downsample, block_size=args.block_size, causal=args.causal)
+        wav_down = downsample_rt(wav_down, upsample, downsample, iir_order=args.iir_order, block_size=args.block_size, causal=args.causal)
 
     # Write file out.
     wav_out = (wav_down * 32767.0).astype(np.int16)
