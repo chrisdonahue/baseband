@@ -44,14 +44,14 @@ def downsample_rt(x, m, l,
         else:
             xup = np.zeros((0,), dtype=block.dtype)
         
-        # Interpolate
+        # Interpolate (allow aliasing)
         if xup.shape[0] > 0:
             xinterp, zinterp_m = lfilter(interp_m[0], interp_m[1], xup, zi=zinterp_m)
         else:
             xinterp = np.zeros_like(xup)
 
         # Apply gain
-        xinterp *= float(max(1, m - 1))
+        xinterp *= float(m)
         
         # Downsample
         extra, xdown = downsample_crude(xinterp[down_offset:], l)
@@ -62,7 +62,8 @@ def downsample_rt(x, m, l,
         # Reupsample
         xreup = upsample_crude(xdown, l)
         
-        # Reinterpolate
+        # Reinterpolate (anti-alias)
+        # TODO: NEED TO ANTI-ALIAS HERE
         if xreup.shape[0] > 0:
             xreinterp, zinterp_l = lfilter(interp_l[0], interp_l[1], xreup, zi=zinterp_l)
         else:
@@ -70,7 +71,7 @@ def downsample_rt(x, m, l,
             xreinterp = np.zeros_like(xreup)
 
         # Apply gain
-        xreinterp *= float(max(1, l - 1))
+        xreinterp *= float(l)
 
         # Redownsample
         reextra, xrecons = downsample_crude(xreinterp[redown_offset:], m)
@@ -159,32 +160,43 @@ if __name__ == '__main__':
 
     # Discretize rate ratio.
     rational_list = rationalize_real(args.fsn / fso, A=A, B=B, max_depth=args.max_cascade)
-    print 'Closest rational list: {}, fsn of {}'.format(rational_list, fso * reduce_rational_list(rational_list))
+    fsn = fso * reduce_rational_list(rational_list)
+    print 'Closest rational list: {}, fsn of {}'.format(rational_list, fsn)
 
-    def create_fir(i, ntaps, tolerance):
-        cutoff = 0.5 / i
+    def create_fir(cutoff, ntaps, tolerance):
         b = remez(ntaps, [0.0, cutoff, cutoff + tolerance, 0.5], [1, 0])
         return b, np.ones(1, dtype=np.float64)
 
-    def create_iir(i, order):
-        return iirfilter(order, 1.0 / i, btype='lowpass', ftype='butter')
+    def create_iir(cutoff, order):
+        return iirfilter(order, cutoff * 2, btype='lowpass', ftype='butter')
 
     def create_identity():
         return (np.array([1.0], dtype=np.float64), np.array([1.0], dtype=np.float64))
 
-    # Perform downsampling.
+    # Perform cascaded downsampling.
     wav_down = wav_f
     for upsample, downsample in rational_list:
-        filters = []
-        for i in [upsample, downsample]:
-            if i > 1:
-                if args.fir:
-                    filters.append(create_fir(i, args.fir_ntaps, args.fir_tol))
-                else:
-                    filters.append(create_iir(i, args.iir_order))
+        # Create upsampling interpolation filter.
+        if upsample > 1:
+            cutoff = 0.5 / float(upsample)
+            if args.fir:
+                interp_m = create_fir(cutoff, args.fir_ntaps, args.fir_tol)
             else:
-                filters.append(create_identity())
-        wav_down = downsample_rt(wav_down, upsample, downsample, filters[0], filters[1], block_size=args.block_size, causal=args.causal)
+                interp_m = create_iir(cutoff, args.iir_order)
+        else:
+            interp_m = create_identity()
+
+        # Create reupsampling interpolation filter.
+        if downsample > 1:
+            cutoff = 0.5 / float(downsample)
+            if args.fir:
+                interp_l = create_fir(cutoff, args.fir_ntaps, args.fir_tol)
+            else:
+                interp_l = create_iir(cutoff, args.iir_order)
+        else:
+            interp_l = create_identity()
+
+        wav_down = downsample_rt(wav_down, upsample, downsample, interp_m, interp_l, block_size=args.block_size, causal=args.causal)
 
     # Write file out.
     wav_out = (wav_down * 32767.0).astype(np.int16)
