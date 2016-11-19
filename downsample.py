@@ -5,8 +5,8 @@ from scipy.signal import lfilter
 from util import read_from_ring_buffer, write_to_ring_buffer, calc_block_range, upsample_crude, downsample_crude
 
 def downsample_rt(x, m, l,
-                  interp_m,
-                  interp_l,
+                  interp_alias,
+                  interp_antialias,
                   block_size=256,
                   causal=True):
     assert m >= 0 and l > 0
@@ -14,8 +14,8 @@ def downsample_rt(x, m, l,
         return np.zeros((0,), dtype=x.dtype)
 
     # Calc initial filter states.
-    zinterp_m = np.zeros(max(interp_m[0].shape[0], interp_m[1].shape[0]) - 1, dtype=np.float64)
-    zinterp_l = np.zeros(max(interp_l[0].shape[0], interp_l[1].shape[0]) - 1, dtype=np.float64)
+    zinterp_alias = np.zeros(max(interp_alias[0].shape[0], interp_alias[1].shape[0]) - 1, dtype=np.float64)
+    zinterp_antialias = np.zeros(max(interp_antialias[0].shape[0], interp_antialias[1].shape[0]) - 1, dtype=np.float64)
 
     # Set initial downsampling offset states.
     down_offset = 0
@@ -46,7 +46,7 @@ def downsample_rt(x, m, l,
         
         # Interpolate (allow aliasing)
         if xup.shape[0] > 0:
-            xinterp, zinterp_m = lfilter(interp_m[0], interp_m[1], xup, zi=zinterp_m)
+            xinterp, zinterp_alias = lfilter(interp_alias[0], interp_alias[1], xup, zi=zinterp_alias)
         else:
             xinterp = np.zeros_like(xup)
 
@@ -63,9 +63,8 @@ def downsample_rt(x, m, l,
         xreup = upsample_crude(xdown, l)
         
         # Reinterpolate (anti-alias)
-        # TODO: NEED TO ANTI-ALIAS HERE
         if xreup.shape[0] > 0:
-            xreinterp, zinterp_l = lfilter(interp_l[0], interp_l[1], xreup, zi=zinterp_l)
+            xreinterp, zinterp_antialias = lfilter(interp_antialias[0], interp_antialias[1], xreup, zi=zinterp_antialias)
         else:
             # Calling lfilter with an empty array has consequences for some reason
             xreinterp = np.zeros_like(xreup)
@@ -128,6 +127,7 @@ if __name__ == '__main__':
     parser.add_argument('--block_size', type=int, help='Block size for downsampling, should only affect runtime and introduce delay in causal mode')
     parser.add_argument('--causal', dest='causal', action='store_true', help='Run the downsampling in real-time (using delay)')
     parser.add_argument('--noncausal', dest='causal', action='store_false', help='Run the downsampling offline (output length may not be equal to input length)')
+    parser.add_argument('--gain', type=float, help='Gain before casting to PCM')
 
     parser.set_defaults(
         a='0,1,2,3,5,7',
@@ -138,7 +138,8 @@ if __name__ == '__main__':
         iir_order=8,
         max_cascade=1,
         block_size=256,
-        causal=False)
+        causal=False,
+        gain=1.0)
 
     args = parser.parse_args()
     print args
@@ -180,24 +181,26 @@ if __name__ == '__main__':
         if upsample > 1:
             cutoff = 0.5 / float(upsample)
             if args.fir:
-                interp_m = create_fir(cutoff, args.fir_ntaps, args.fir_tol)
+                interp_alias = create_fir(cutoff, args.fir_ntaps, args.fir_tol)
             else:
-                interp_m = create_iir(cutoff, args.iir_order)
+                interp_alias = create_iir(cutoff, args.iir_order)
         else:
-            interp_m = create_identity()
+            interp_alias = create_identity()
 
         # Create reupsampling interpolation filter.
+        larger = max(upsample, downsample)
         if downsample > 1:
-            cutoff = 0.5 / float(downsample)
+            cutoff = 0.5 / float(larger)
             if args.fir:
-                interp_l = create_fir(cutoff, args.fir_ntaps, args.fir_tol)
+                interp_antialias = create_fir(cutoff, args.fir_ntaps, args.fir_tol)
             else:
-                interp_l = create_iir(cutoff, args.iir_order)
+                interp_antialias = create_iir(cutoff, args.iir_order)
         else:
-            interp_l = create_identity()
+            interp_antialias = create_identity()
 
-        wav_down = downsample_rt(wav_down, upsample, downsample, interp_m, interp_l, block_size=args.block_size, causal=args.causal)
+        wav_down = downsample_rt(wav_down, upsample, downsample, interp_alias, interp_antialias, block_size=args.block_size, causal=args.causal)
 
     # Write file out.
+    wav_down *= args.gain
     wav_out = (wav_down * 32767.0).astype(np.int16)
     wavwrite(args.out_fp, fso, wav_out)
