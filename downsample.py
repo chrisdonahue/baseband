@@ -35,6 +35,7 @@ def downsample_rt(x, m, l,
     if causal:
         wav_down = []
     wav_noncausal = []
+    block_num = 0
     for i in xrange(0, len(x), block_size):
         block = x[i:i + block_size]
 
@@ -52,6 +53,13 @@ def downsample_rt(x, m, l,
 
         # Apply gain
         xinterp *= float(m)
+
+        # Check offset
+        predicted_offset = (l - ((block_num * m * block_size) % l)) % l
+        print predicted_offset
+        print down_offset
+        assert predicted_offset == down_offset
+        block_num += 1
         
         # Downsample
         extra, xdown = downsample_crude(xinterp[down_offset:], l)
@@ -87,6 +95,9 @@ def downsample_rt(x, m, l,
                 print storage_len
                 print 'yay'
 
+            print '----'
+            print write_idx
+            print read_idx
             write_idx = write_to_ring_buffer(storage, blockout, write_idx)
             read_idx, blockdel = read_from_ring_buffer(storage, block.shape[0], read_idx)
             wav_down.append(blockdel)
