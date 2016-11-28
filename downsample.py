@@ -4,114 +4,36 @@ from scipy.signal import lfilter
 
 from util import read_from_ring_buffer, write_to_ring_buffer, calc_block_range, upsample_crude, downsample_crude
 
-def downsample_rt(x, m, l,
-                  interp_alias,
-                  interp_antialias,
-                  block_size=256,
-                  causal=True):
+def multirate_rt(x, m, l, m_offset, filt, zfilt=None):
     assert m >= 0 and l > 0
     if m == 0:
         return np.zeros((0,), dtype=x.dtype)
 
-    # Calc initial filter states.
-    zinterp_alias = np.zeros(max(interp_alias[0].shape[0], interp_alias[1].shape[0]) - 1, dtype=np.float64)
-    zinterp_antialias = np.zeros(max(interp_antialias[0].shape[0], interp_antialias[1].shape[0]) - 1, dtype=np.float64)
+    if zfilt is None:
+        zfilt = np.zeros(max(filt[0].shape[0], filt[1].shape[0]) - 1, dtype=np.float64)
 
-    # Set initial downsampling offset states.
-    down_offset = 0
-    redown_offset = 0
-
-    # Calc delay state.
-    if causal:
-        blockout_minlen, blockout_maxlen = calc_block_range(block_size, m, l)
-        delay = block_size - blockout_minlen
-        overflow = blockout_maxlen - block_size
-        storage_len = delay + block_size + overflow
-        storage = np.zeros(storage_len, dtype=np.float64)
-        read_idx = 0
-        write_idx = delay
-
-    # Perform RT downsampling. Keep a noncausal version around as a sanity check.
-    if causal:
-        wav_down = []
-    wav_noncausal = []
-    block_num = 0
-    for i in xrange(0, len(x), block_size):
-        block = x[i:i + block_size]
-
-        # Upsample
-        if m > 0:
-            xup = upsample_crude(block, m)
-        else:
-            xup = np.zeros((0,), dtype=block.dtype)
-        
-        # Interpolate (allow aliasing)
-        if xup.shape[0] > 0:
-            xinterp, zinterp_alias = lfilter(interp_alias[0], interp_alias[1], xup, zi=zinterp_alias)
-        else:
-            xinterp = np.zeros_like(xup)
-
-        # Apply gain
-        xinterp *= float(m)
-
-        # Check offset
-        predicted_offset = (l - ((block_num * m * block_size) % l)) % l
-        print predicted_offset
-        print down_offset
-        assert predicted_offset == down_offset
-        block_num += 1
-        
-        # Downsample
-        extra, xdown = downsample_crude(xinterp[down_offset:], l)
-        down_offset = l - extra
-        if down_offset == l:
-            down_offset = 0
-        
-        # Reupsample
-        xreup = upsample_crude(xdown, l)
-        
-        # Reinterpolate (anti-alias)
-        if xreup.shape[0] > 0:
-            xreinterp, zinterp_antialias = lfilter(interp_antialias[0], interp_antialias[1], xreup, zi=zinterp_antialias)
-        else:
-            # Calling lfilter with an empty array has consequences for some reason
-            xreinterp = np.zeros_like(xreup)
-
-        # Apply gain
-        xreinterp *= float(l)
-
-        # Redownsample
-        reextra, xrecons = downsample_crude(xreinterp[redown_offset:], m)
-        redown_offset = m - reextra
-        if redown_offset == m:
-            redown_offset = 0
-        
-        blockout = xrecons
-        wav_noncausal.append(blockout)
-
-        if causal:
-            # TODO: remove this. Trying to verify my calculation for buffer size by seeing a case where we don't overshoot
-            if blockout.size == storage_len and delay + overflow != 0:
-                print storage_len
-                print 'yay'
-
-            print '----'
-            print write_idx
-            print read_idx
-            write_idx = write_to_ring_buffer(storage, blockout, write_idx)
-            read_idx, blockdel = read_from_ring_buffer(storage, block.shape[0], read_idx)
-            wav_down.append(blockdel)
-
-    if causal:
-        # Alert us if our theoretical ranges were ever wrong.
-        blockout_lens = [x.shape[0] for x in wav_noncausal[:-1]]
-        if len(blockout_lens) > 0:
-            assert min(blockout_lens) >= blockout_minlen
-            assert max(blockout_lens) <= blockout_maxlen
-        return np.concatenate(wav_down)
+    # Upsample
+    if m > 0:
+        xup = upsample_crude(x, m)
     else:
-        return np.concatenate(wav_noncausal)
+        xup = np.zeros((0,), dtype=x.dtype)
+    
+    # Interpolate
+    if xup.shape[0] > 0:
+        xinterp, zfilt = lfilter(filt[0], filt[1], xup, zi=zfilt)
+    else:
+        xinterp = np.zeros_like(xup)
 
+    # Apply gain
+    xinterp *= float(m)
+    
+    # Decimate
+    extra, xdown = downsample_crude(xinterp[m_offset:], l)
+    m_offset = l - extra
+    if m_offset == l:
+        m_offset = 0
+
+    return xdown, m_offset, zfilt
 
 if __name__ == '__main__':
     import argparse
@@ -185,8 +107,11 @@ if __name__ == '__main__':
     def create_identity():
         return (np.array([1.0], dtype=np.float64), np.array([1.0], dtype=np.float64))
 
-    # Perform cascaded downsampling.
-    wav_down = wav_f
+    # Create filters.
+    filt_alias = []
+    zfilt_alias = []
+    filt_antialias = []
+    zfilt_antialias = []
     for upsample, downsample in rational_list:
         # Create upsampling interpolation filter.
         if upsample > 1:
@@ -197,6 +122,8 @@ if __name__ == '__main__':
                 interp_alias = create_iir(cutoff, args.iir_order)
         else:
             interp_alias = create_identity()
+        filt_alias.append(interp_alias)
+        zfilt_alias.append(None)
 
         # Create reupsampling interpolation filter.
         larger = max(upsample, downsample)
@@ -208,10 +135,50 @@ if __name__ == '__main__':
                 interp_antialias = create_iir(cutoff, args.iir_order)
         else:
             interp_antialias = create_identity()
+        filt_antialias.append(interp_antialias)
+        zfilt_antialias.append(None)
 
-        wav_down = downsample_rt(wav_down, upsample, downsample, interp_alias, interp_antialias, block_size=args.block_size, causal=args.causal)
+    # Create delay buffers.
+    _, block_max = calc_block_range(args.block_size, rational_list)
+    delay_buffer = np.zeros(args.block_size * 2, dtype=np.float64)
+    delay_read_idx = 0
+    delay_write_idx = 0
+    num_written = 0
+    num_read = 0
+
+    # Initialize offsets.
+    alias_offsets = [0 for _ in xrange(len(rational_list))]
+    antialias_offsets = [0 for _ in xrange(len(rational_list))]
+
+    # Perform cascaded downsampling.
+    wav_out = []
+    for i in xrange(0, wav_f.shape[0], args.block_size):
+        block_last_rate = wav_f[i:i + args.block_size]
+        block_size = block_last_rate.shape[0]
+
+        for i, (upsample, downsample) in enumerate(rational_list):
+            block_last_rate, offset, zfilt = multirate_rt(block_last_rate, upsample, downsample, alias_offsets[i], filt_alias[i], zfilt_alias[i])
+            alias_offsets[i] = offset
+            zfilt_alias[i] = zfilt
+
+        for i in reversed(xrange(len(rational_list))):
+            upsample, downsample = rational_list[i]
+
+            block_last_rate, offset, zfilt = multirate_rt(block_last_rate, downsample, upsample, antialias_offsets[i], filt_antialias[i], zfilt_antialias[i])
+            antialias_offsets[i] = offset
+            zfilt_antialias[i] = zfilt
+
+        delay_write_idx = write_to_ring_buffer(delay_buffer, block_last_rate, delay_write_idx)
+        num_written += block_last_rate.shape[0]
+        delay_read_idx, block_last_rate_del = read_from_ring_buffer(delay_buffer, block_size, delay_read_idx)
+        num_read += block_size
+
+        assert num_written >= num_read
+
+        wav_out.append(block_last_rate_del)
+    wav_out = np.concatenate(wav_out)
 
     # Write file out.
-    wav_down *= args.gain
-    wav_out = (wav_down * 32767.0).astype(np.int16)
+    wav_out *= args.gain
+    wav_out = (wav_out * 32767.0).astype(np.int16)
     wavwrite(args.out_fp, fso, wav_out)

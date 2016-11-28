@@ -97,27 +97,12 @@ def rationalize_real(rat, A, B, max_depth=1, curr_depth=0, curr_rational_list=[]
                 closest = (error, rational_list)
     return closest[1]
 
-def calc_block_range(n, m, l):
-    """Calculates the range [x, y] of possible block output sizes for a fractional downsample.
+def calc_block_range(n, ratios):
+    ratios = ratios + [(b, a) for a, b in ratios[::-1]]
 
-    Minimum delay is:    n - x
-    Maximum overflow is: y - n
-    Delay buffer len:    n - x + y
+    b = [n, n]
+    for l, m in ratios:
+        b[0] = int(np.floor((l * float(b[0])) / m))
+        b[1] = int(np.ceil((l * float(b[1])) / m))
 
-    n: block size
-    m: upsample factor
-    l: downsample factor
-    """
-    n = float(n)
-    m = float(m)
-    l = float(l)
-    
-    floor = lambda x: math.floor(x)
-    ceil = lambda x: math.ceil(x)
-    
-    orig = [n, n]
-    up = [m * orig[0], m * orig[1]]
-    down = [floor(up[0] / l), ceil(up[1] / l)]
-    reup = [l * down[0], l * down[1]]
-    redown = [floor(reup[0] / m), ceil(reup[1] / m)]
-    return int(redown[0]), int(redown[1])
+    return tuple(b)
